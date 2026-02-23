@@ -13,6 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/transactions")
@@ -37,7 +38,11 @@ public class TransactionController {
     public ResponseEntity<TransactionResponse> getById(@PathVariable Long id) {
         return ResponseEntity.ok(transactionService.getById(id));
     }
-
+    @GetMapping("/search")
+    public ResponseEntity<List<TransactionResponse>> search(
+            @RequestParam(required = false) String q) {
+        return ResponseEntity.ok(transactionService.search(q));
+    }
     @PostMapping
     public ResponseEntity<TransactionResponse> create(@Valid @RequestBody TransactionRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(transactionService.create(request));

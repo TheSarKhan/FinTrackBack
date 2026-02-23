@@ -23,4 +23,5 @@ public interface TransactionService {
             int page,
             int size
     );
+    List<TransactionResponse> search(String query);
 }

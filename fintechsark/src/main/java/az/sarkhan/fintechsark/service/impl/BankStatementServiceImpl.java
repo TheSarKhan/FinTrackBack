@@ -10,10 +10,12 @@ import az.sarkhan.fintechsark.security.SecurityUtils;
 import az.sarkhan.fintechsark.service.BankStatementService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -29,9 +31,12 @@ public class BankStatementServiceImpl implements BankStatementService {
     private final CategoryRepository categoryRepository;
     private final SecurityUtils securityUtils;
 
+
     @Override
     public List<BankStatementRow> parse(BankType bankType, MultipartFile file) {
-        try (Workbook workbook = new XSSFWorkbook(file.getInputStream())) {
+        try {
+            ZipSecureFile.setMinInflateRatio(0.001);
+            Workbook workbook = WorkbookFactory.create(file.getInputStream());
             Sheet sheet = workbook.getSheetAt(0);
             List<Category> categories = categoryRepository.findAllVisibleToUser(
                     securityUtils.getCurrentUserId()
@@ -41,15 +46,15 @@ public class BankStatementServiceImpl implements BankStatementService {
                 case KAPITAL    -> parseKapital(sheet, categories);
                 case RABITABANK -> parseRabitabank(sheet, categories);
                 case XALQBANK   -> parseXalqbank(sheet, categories);
-                case AZERPOST   -> parseAzerpost(sheet, categories);
+                case LEOBANK    -> parseLeobank(sheet, categories);
             };
         } catch (IOException e) {
             throw new BusinessException("Excel faylı oxunarkən xəta baş verdi: " + e.getMessage());
+        } catch (Exception e) {
+            throw new BusinessException("Fayl formatı dəstəklənmir: " + e.getMessage());
         }
     }
 
-    // ── ABB Bank ─────────────────────────────────────────────────────────
-    // Format: Tarix | Açıqlama | Debet | Kredit | Balans
     private List<BankStatementRow> parseAbb(Sheet sheet, List<Category> categories) {
         List<BankStatementRow> rows = new ArrayList<>();
 
@@ -75,8 +80,8 @@ public class BankStatementServiceImpl implements BankStatementService {
             Row row = sheet.getRow(i);
             if (row == null) continue;
 
-            String dateStr   = stringVal(row.getCell(1));
-            String fullDesc  = stringVal(row.getCell(2));
+            String dateStr  = stringVal(row.getCell(1));
+            String fullDesc = stringVal(row.getCell(2));
             BigDecimal income  = decimalVal(row.getCell(3));
             BigDecimal expense = decimalVal(row.getCell(4));
 
@@ -113,7 +118,97 @@ public class BankStatementServiceImpl implements BankStatementService {
 
         return rows;
     }
+    // ── LeoBank ───────────────────────────────────────────────────────────
+// Format: Tarix | Təyinat | Məbləğ | Komissiya | Balans
+// Tarix: dd-MM-yyyy HH:mm:ss  |  Məbləğ: mənfi → XƏRC, müsbət → GƏLİR
+    private List<BankStatementRow> parseLeobank(Sheet sheet, List<Category> categories) {
+        List<BankStatementRow> rows = new ArrayList<>();
 
+        // Header sətirini tap
+        int dataStartRow = -1;
+        for (int i = 0; i <= sheet.getLastRowNum(); i++) {
+            Row row = sheet.getRow(i);
+            if (row == null) continue;
+            String cell = stringVal(row.getCell(0));
+            if ("Tarix".equalsIgnoreCase(cell.trim())) {
+                dataStartRow = i + 1;
+                break;
+            }
+        }
+
+        if (dataStartRow == -1) return rows;
+
+        Category cat = categories.stream()
+                .filter(c -> c.getName().equalsIgnoreCase("Bank Çıxarışı"))
+                .findFirst()
+                .orElse(null);
+
+        for (int i = dataStartRow; i <= sheet.getLastRowNum(); i++) {
+            Row row = sheet.getRow(i);
+            if (row == null) continue;
+
+            String dateStr    = stringVal(row.getCell(0));
+            String description = stringVal(row.getCell(1));
+            String amountStr  = stringVal(row.getCell(2));
+
+            if (dateStr.isBlank()) continue;
+
+            // Tarix: "23-01-2026 14:33:23" → dd-MM-yyyy
+            LocalDate date = parsLeobankDate(dateStr);
+            if (date == null) continue;
+
+            // Məbləğ: "-0.7" → XƏRC, "17.05" → GƏLİR
+            BigDecimal amount;
+            try {
+                amount = new BigDecimal(amountStr.replace(",", ".").replace(" ", ""));
+            } catch (Exception e) {
+                continue;
+            }
+
+            if (amount.compareTo(BigDecimal.ZERO) == 0) continue;
+
+            TransactionType type;
+            BigDecimal absAmount;
+
+            if (amount.compareTo(BigDecimal.ZERO) < 0) {
+                type      = TransactionType.EXPENSE;
+                absAmount = amount.abs();
+            } else {
+                type      = TransactionType.INCOME;
+                absAmount = amount;
+            }
+
+            Category parent = cat != null ? cat.getParent() : null;
+            rows.add(new BankStatementRow(
+                    date,
+                    description.trim(),
+                    cat != null ? cat.getId() : null,
+                    "Bank Çıxarışı",
+                    parent != null ? parent.getId()   : null,
+                    parent != null ? parent.getName() : null,
+                    type,
+                    absAmount
+            ));
+        }
+
+        return rows;
+    }
+
+    private LocalDate parsLeobankDate(String dateStr) {
+        try {
+            // "23-01-2026 14:33:23" formatı
+            String datePart = dateStr.trim().split(" ")[0]; // "23-01-2026"
+            String[] parts  = datePart.split("-");
+            return LocalDate.of(
+                    Integer.parseInt(parts[2]), // il
+                    Integer.parseInt(parts[1]), // ay
+                    Integer.parseInt(parts[0])  // gün
+            );
+        } catch (Exception e) {
+            log.warn("LeoBank tarix parse edilə bilmədi: {}", dateStr);
+            return null;
+        }
+    }
     // ── Kapital Bank ──────────────────────────────────────────────────────
     // Format: Tarix | Əməliyyat | Məbləğ | Valyuta | Növ | Açıqlama
     private List<BankStatementRow> parseKapital(Sheet sheet, List<Category> categories) {

@@ -67,7 +67,16 @@ public class TransactionServiceImpl implements TransactionService {
 
         return toResponse(transactionRepository.save(transaction));
     }
-
+    @Override
+    @Transactional(readOnly = true)
+    public List<TransactionResponse> search(String query) {
+        if (query == null || query.isBlank()) return List.of();
+        Long userId = securityUtils.getCurrentUserId();
+        return transactionRepository.searchTransactions(userId, query.trim())
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
     private String buildDefaultDescription(Category category) {
         if (category.getParent() != null) {
             return category.getParent().getName() + " + " + category.getName();

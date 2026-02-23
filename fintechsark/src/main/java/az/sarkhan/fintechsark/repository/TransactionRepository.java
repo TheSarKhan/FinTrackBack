@@ -203,4 +203,22 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             @Param("userId") Long userId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+
+    @Query(value = """
+    SELECT t.* FROM transactions t
+    JOIN categories c ON c.id = t.category_id
+    LEFT JOIN categories p ON p.id = c.parent_id
+    WHERE t.user_id = :userId
+      AND t.is_deleted = false
+      AND (
+          LOWER(t.description) LIKE LOWER(CONCAT('%', :query, '%'))
+          OR CAST(t.amount AS varchar) LIKE CONCAT('%', :query, '%')
+          OR LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%'))
+          OR LOWER(p.name) LIKE LOWER(CONCAT('%', :query, '%'))
+      )
+    ORDER BY t.date DESC, t.created_at DESC
+    """, nativeQuery = true)
+    List<Transaction> searchTransactions(
+            @Param("userId") Long userId,
+            @Param("query") String query);
 }
