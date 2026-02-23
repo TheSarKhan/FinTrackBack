@@ -53,6 +53,148 @@ public class AiServiceImpl implements AiService {
         String analysis = buildFullMonthAnalysis(transactions);
         return new AiChatResponse(analysis, LocalDateTime.now());
     }
+    @Override
+    @Transactional(readOnly = true)
+    public AiChatResponse getWrappedRoast(int year) {
+        Long userId = securityUtils.getCurrentUserId();
+
+        LocalDate startDate = LocalDate.of(year, 1, 1);
+        LocalDate endDate   = LocalDate.of(year, 12, 31);
+
+        List<Transaction> all = transactionRepository.findCurrentMonthTransactions(
+                userId, startDate, endDate
+        );
+
+        if (all.isEmpty()) {
+            return new AiChatResponse(
+                    "🔮 " + year + "-ci ildə heç bir tranzaksiya yoxdur. " +
+                            "Ya pulsuz yaşadın, ya da məndən gizlədirsən. İkisi də şübhəlidir.",
+                    LocalDateTime.now()
+            );
+        }
+
+        String financialSummary = buildWrappedSummaryForAi(all, year);
+        String roast = generateRoast(financialSummary, year);
+
+        return new AiChatResponse(roast, LocalDateTime.now());
+    }
+
+    private String buildWrappedSummaryForAi(List<Transaction> all, int year) {
+        List<Transaction> expenses = all.stream()
+                .filter(t -> t.getType() == TransactionType.EXPENSE).toList();
+        List<Transaction> incomes = all.stream()
+                .filter(t -> t.getType() == TransactionType.INCOME).toList();
+
+        BigDecimal totalExpense = expenses.stream().map(Transaction::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalIncome = incomes.stream().map(Transaction::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal saved = totalIncome.subtract(totalExpense);
+
+        // Top kateqoriya
+        Map<String, BigDecimal> byCategory = new LinkedHashMap<>();
+        for (Transaction t : expenses) {
+            Category cat = t.getCategory();
+            String name = cat.getParent() != null ? cat.getParent().getName() : cat.getName();
+            byCategory.merge(name, t.getAmount(), BigDecimal::add);
+        }
+
+        String topCategory = byCategory.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(e -> e.getKey() + " (" + e.getValue().setScale(2, RoundingMode.HALF_UP) + " AZN)")
+                .orElse("bilinmir");
+
+        String topCategories = byCategory.entrySet().stream()
+                .sorted(Map.Entry.<String, BigDecimal>comparingByValue().reversed())
+                .limit(3)
+                .map(e -> e.getKey() + ": " + e.getValue().setScale(2, RoundingMode.HALF_UP) + " AZN")
+                .collect(Collectors.joining(", "));
+
+        double savingsRate = totalIncome.compareTo(BigDecimal.ZERO) == 0 ? 0
+                : saved.divide(totalIncome, 4, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100)).doubleValue();
+
+        return String.format("""
+            İl: %d
+            Ümumi gəlir: %.2f AZN
+            Ümumi xərc: %.2f AZN
+            Qənaət: %.2f AZN
+            Qənaət nisbəti: %.1f%%
+            Ən çox xərc edilən kateqoriya: %s
+            Top 3 kateqoriya: %s
+            Tranzaksiya sayı: %d
+            """,
+                year, totalIncome, totalExpense, saved, savingsRate,
+                topCategory, topCategories, all.size()
+        );
+    }
+
+    private String generateRoast(String summary, int year) {
+        // Ay üzrə bürc təyin et (random deyil, xərc nisbətinə görə)
+        String[] burcler = {
+                "♈ Qoç — impulsiv xərclər etməyi sevirsən",
+                "♉ Buğa — yemək xərclərin ciddi şəkildə yüksəkdir",
+                "♊ Əkizlər — bu ay xərclədin, bu ay peşman oldun",
+                "♋ Xərçəng — evə çox pul xərcləyirsən, amma kirayədəsən",
+                "♌ Şir — özünə hədiyyə almağı unutmursan",
+                "♍ Qız — xərcləri analiz edirsən amma azaltmırsan",
+                "♎ Tərəzi — gəlir-xərc balansı tapmağa çalışırsan, alınmır",
+                "♏ Əqrəb — xərclərini gizlədərsən amma mən görürəm",
+                "♐ Oxatan — hədəf qoyursan, amma büdcəni aşırsan",
+                "♑ Oğlaq — qənaətcil görünürsən amma yox",
+                "♒ Dolça — texnologiyaya pul xərcləyirsən",
+                "♓ Balıq — xərclərini axına buraxırsan"
+        };
+
+        int burcIndex = Math.abs(summary.hashCode()) % burcler.length;
+        String burc = burcler[burcIndex];
+
+        return String.format("""
+            🔮 %d-ci İlin Maliyyə Bürcü
+
+            %s
+
+            📊 Maliyyə Analizi:
+            %s
+
+            🎭 Mən, sizin şəxsi maliyyə falçınız, bunu görürəm:
+
+            %s
+
+            ⭐ Gələn il üçün proqnoz:
+            %s
+            """,
+                year, burc, summary,
+                generatePersonalRoast(summary),
+                generatePrediction()
+        );
+    }
+
+    private String generatePersonalRoast(String summary) {
+        List<String> roasts = List.of(
+                "Xərclərini görəndə hesabım dondu. Yenidən yükləmək lazım oldu.",
+                "Restoran xərclərini görəndə aşpazın sənin ən yaxşı dostun olduğunu düşündüm.",
+                "Qənaət nisbətin o qədər aşağıdır ki, riyaziyyatçılar mənfi ədəd kimi qeyd edib.",
+                "Market xərclərini görəndə evdə restoranın var deyə düşündüm.",
+                "Tranzaksiyalarına baxanda bir az ağladım. Professional olaraq.",
+                "Büdcə planlamasını 'yaşayırıq bir dəfə' fəlsəfəsi ilə idarə edirsən, görürəm.",
+                "Xərclərini görəndə bankın sənə 'Sağ ol' dediyi aydın oldu.",
+                "Qənaətin o qədər azdır ki, hesablamaq üçün mikroskop lazım oldu."
+        );
+        return roasts.get(Math.abs(summary.hashCode()) % roasts.size());
+    }
+
+    private String generatePrediction() {
+        List<String> predictions = List.of(
+                "💫 Gələn il xərclərini 10% azaldacaqsan. Ehtimal: 3%.",
+                "🌟 Büdcə planlaması aparmağa başlayacaqsan. Tərk etmə tarixi: 3 gün sonra.",
+                "✨ Böyük bir qənaət edəcəksən. Sonra daha böyük bir xərc edəcəksən.",
+                "🎯 Maliyyə hədəfin olacaq. Unutma tarixi: Yanvarın 15-i.",
+                "💡 Bu il 'artıq restoranda yemərəm' deyəcəksən. Uğurlar.",
+                "🔮 Gəlirin artacaq. Xərclərin daha çox artacaq. Tarazlıq pozulmayacaq."
+        );
+        return predictions.get((int)(System.currentTimeMillis() % predictions.size()));
+    }
 
     // ── Rule-based AI analysis ───────────────────────────────────────────
 

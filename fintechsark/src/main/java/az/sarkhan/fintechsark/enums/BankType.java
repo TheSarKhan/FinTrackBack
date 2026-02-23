@@ -5,5 +5,6 @@ public enum BankType {
     KAPITAL,
     RABITABANK,
     XALQBANK,
-    LEOBANK
+    LEOBANK,
+    DOSTBANK
 }

@@ -26,4 +26,10 @@ public class AiController {
     public ResponseEntity<AiChatResponse> analyze() {
         return ResponseEntity.ok(aiService.analyzeCurrentMonth());
     }
+
+    @GetMapping("/wrapped-roast")
+    public ResponseEntity<AiChatResponse> getWrappedRoast(
+            @RequestParam(defaultValue = "2025") int year) {
+        return ResponseEntity.ok(aiService.getWrappedRoast(year));
+    }
 }

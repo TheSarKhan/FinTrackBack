@@ -47,6 +47,8 @@ public class BankStatementServiceImpl implements BankStatementService {
                 case RABITABANK -> parseRabitabank(sheet, categories);
                 case XALQBANK   -> parseXalqbank(sheet, categories);
                 case LEOBANK    -> parseLeobank(sheet, categories);
+                case DOSTBANK -> parseDostbank(sheet, categories);
+
             };
         } catch (IOException e) {
             throw new BusinessException("Excel faylı oxunarkən xəta baş verdi: " + e.getMessage());
@@ -207,6 +209,98 @@ public class BankStatementServiceImpl implements BankStatementService {
         } catch (Exception e) {
             log.warn("LeoBank tarix parse edilə bilmədi: {}", dateStr);
             return null;
+        }
+    }
+    // ── DostBank ──────────────────────────────────────────────────────────
+// Format: Əməliyyat tarixi | Tranzaksiya № | Məbləğ | Kateqoriya | Kart № | Təsvir | Komissiya | Əməliyyat növü
+// Header: Row 6 (0-based), Data: Row 7-dən başlayır
+// Tarix: "22.02.2026 19:04:42" → dd.MM.yyyy
+// Əməliyyat növü: "Mədaxil" → GƏLİR, "Məxaric" → XƏRC
+    private List<BankStatementRow> parseDostbank(Sheet sheet, List<Category> categories) {
+        List<BankStatementRow> rows = new ArrayList<>();
+
+        // Header sətirini dinamik tap
+        int dataStartRow = -1;
+        for (int i = 0; i <= sheet.getLastRowNum(); i++) {
+            Row row = sheet.getRow(i);
+            if (row == null) continue;
+            String cell = stringVal(row.getCell(1));
+            if ("Əməliyyat tarixi".equalsIgnoreCase(cell.trim())) {
+                dataStartRow = i + 1;
+                break;
+            }
+        }
+
+        if (dataStartRow == -1) return rows;
+
+        Category cat = categories.stream()
+                .filter(c -> c.getName().equalsIgnoreCase("Bank Çıxarışı"))
+                .findFirst()
+                .orElse(null);
+
+        for (int i = dataStartRow; i <= sheet.getLastRowNum(); i++) {
+            Row row = sheet.getRow(i);
+            if (row == null) continue;
+
+            String dateStr     = stringVal(row.getCell(1)); // "22.02.2026 19:04:42"
+            String amountStr   = stringVal(row.getCell(3)); // "344.17 AZN"
+            String description = stringVal(row.getCell(6)); // "www.birbank.az"
+            String typeStr     = stringVal(row.getCell(8)); // "Mədaxil" / "Məxaric"
+
+            if (dateStr.isBlank()) continue;
+
+            // Tarix: "22.02.2026 19:04:42" → dd.MM.yyyy
+            LocalDate date = parseDostbankDate(dateStr);
+            if (date == null) continue;
+
+            // Məbləğ: "344.17 AZN" → 344.17
+            BigDecimal amount = parseDostbankAmount(amountStr);
+            if (amount.compareTo(BigDecimal.ZERO) == 0) continue;
+
+            // Növ: "Mədaxil" → INCOME, "Məxaric" → EXPENSE
+            TransactionType type = "Mədaxil".equalsIgnoreCase(typeStr.trim())
+                    ? TransactionType.INCOME
+                    : TransactionType.EXPENSE;
+
+            Category parent = cat != null ? cat.getParent() : null;
+            rows.add(new BankStatementRow(
+                    date,
+                    description.trim(),
+                    cat != null ? cat.getId() : null,
+                    "Bank Çıxarışı",
+                    parent != null ? parent.getId()   : null,
+                    parent != null ? parent.getName() : null,
+                    type,
+                    amount
+            ));
+        }
+
+        return rows;
+    }
+
+    private LocalDate parseDostbankDate(String dateStr) {
+        try {
+            // "22.02.2026 19:04:42" → ilk hissəni götür
+            String datePart = dateStr.trim().split(" ")[0]; // "22.02.2026"
+            String[] parts  = datePart.split("\\.");
+            return LocalDate.of(
+                    Integer.parseInt(parts[2]), // il
+                    Integer.parseInt(parts[1]), // ay
+                    Integer.parseInt(parts[0])  // gün
+            );
+        } catch (Exception e) {
+            log.warn("DostBank tarix parse edilə bilmədi: {}", dateStr);
+            return null;
+        }
+    }
+
+    private BigDecimal parseDostbankAmount(String amountStr) {
+        try {
+            // "344.17 AZN" → "344.17"  |  "2.99 USD" → "2.99"
+            String cleaned = amountStr.trim().split(" ")[0].replace(",", ".");
+            return new BigDecimal(cleaned);
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
         }
     }
     // ── Kapital Bank ──────────────────────────────────────────────────────

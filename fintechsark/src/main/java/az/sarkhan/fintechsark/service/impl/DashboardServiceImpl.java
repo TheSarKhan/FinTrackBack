@@ -1,6 +1,9 @@
 package az.sarkhan.fintechsark.service.impl;
 
 import az.sarkhan.fintechsark.dto.response.*;
+import az.sarkhan.fintechsark.entity.Category;
+import az.sarkhan.fintechsark.entity.Transaction;
+import az.sarkhan.fintechsark.enums.TransactionType;
 import az.sarkhan.fintechsark.repository.TransactionRepository;
 import az.sarkhan.fintechsark.security.SecurityUtils;
 import az.sarkhan.fintechsark.service.DashboardService;
@@ -29,6 +32,126 @@ public class DashboardServiceImpl implements DashboardService {
         return getStatsByPeriod("ALL");
     }
 
+    @Override
+    public List<Integer> getAvailableYears() {
+        return transactionRepository.findDistinctYears(securityUtils.getCurrentUserId());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public FinancialWrappedResponse getWrapped(int year) {
+        Long userId = securityUtils.getCurrentUserId();
+
+        LocalDate startDate = LocalDate.of(year, 1, 1);
+        LocalDate endDate   = LocalDate.of(year, 12, 31);
+
+        List<Transaction> all = transactionRepository.findCurrentMonthTransactions(
+                userId, startDate, endDate
+        );
+
+        List<Transaction> expenses = all.stream()
+                .filter(t -> t.getType() == TransactionType.EXPENSE).toList();
+        List<Transaction> incomes = all.stream()
+                .filter(t -> t.getType() == TransactionType.INCOME).toList();
+
+        BigDecimal totalExpense = sum(expenses);
+        BigDecimal totalIncome  = sum(incomes);
+        BigDecimal totalSaved   = totalIncome.subtract(totalExpense);
+        double savingsRate = totalIncome.compareTo(BigDecimal.ZERO) == 0 ? 0
+                : totalSaved.divide(totalIncome, 4, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100)).doubleValue();
+
+        // Kateqoriya statistikası
+        Map<String, List<Transaction>> byCategory = expenses.stream()
+                .collect(Collectors.groupingBy(t -> {
+                    Category cat = t.getCategory();
+                    return cat.getParent() != null ? cat.getParent().getName() : cat.getName();
+                }));
+
+        List<FinancialWrappedResponse.CategoryStat> topCategories = byCategory.entrySet().stream()
+                .map(e -> {
+                    BigDecimal catTotal = sum(e.getValue());
+                    double pct = totalExpense.compareTo(BigDecimal.ZERO) == 0 ? 0
+                            : catTotal.divide(totalExpense, 4, RoundingMode.HALF_UP)
+                            .multiply(BigDecimal.valueOf(100)).doubleValue();
+                    return new FinancialWrappedResponse.CategoryStat(
+                            e.getKey(), catTotal, pct, e.getValue().size()
+                    );
+                })
+                .sorted(Comparator.comparing(FinancialWrappedResponse.CategoryStat::totalAmount).reversed())
+                .toList();
+
+        // Aylıq breakdown
+        Map<String, List<Transaction>> byMonth = all.stream()
+                .collect(Collectors.groupingBy(t ->
+                        t.getDate().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM"))));
+
+        String[] aylar = {"", "Yanvar", "Fevral", "Mart", "Aprel", "May", "İyun",
+                "İyul", "Avqust", "Sentyabr", "Oktyabr", "Noyabr", "Dekabr"};
+
+        List<FinancialWrappedResponse.MonthlyStat> monthlyBreakdown = byMonth.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(e -> {
+                    List<Transaction> monthTxns = e.getValue();
+                    BigDecimal inc = sum(monthTxns.stream()
+                            .filter(t -> t.getType() == TransactionType.INCOME).toList());
+                    BigDecimal exp = sum(monthTxns.stream()
+                            .filter(t -> t.getType() == TransactionType.EXPENSE).toList());
+                    int monthNum = Integer.parseInt(e.getKey().split("-")[1]);
+                    return new FinancialWrappedResponse.MonthlyStat(
+                            e.getKey(), aylar[monthNum], inc, exp, inc.subtract(exp)
+                    );
+                })
+                .toList();
+
+        // Ən çox xərc edilən ay
+        FinancialWrappedResponse.MonthlyStat biggestExpenseMonth = monthlyBreakdown.stream()
+                .max(Comparator.comparing(FinancialWrappedResponse.MonthlyStat::expense))
+                .orElse(null);
+
+        // Ən çox gəlir olan ay
+        FinancialWrappedResponse.MonthlyStat biggestIncomeMonth = monthlyBreakdown.stream()
+                .max(Comparator.comparing(FinancialWrappedResponse.MonthlyStat::income))
+                .orElse(null);
+
+        // Ortalamalar
+        long activeMonths = monthlyBreakdown.stream()
+                .filter(m -> m.expense().compareTo(BigDecimal.ZERO) > 0).count();
+        long activeIncomeMonths = monthlyBreakdown.stream()
+                .filter(m -> m.income().compareTo(BigDecimal.ZERO) > 0).count();
+
+        BigDecimal avgMonthlyExpense = activeMonths == 0 ? BigDecimal.ZERO
+                : totalExpense.divide(BigDecimal.valueOf(activeMonths), 2, RoundingMode.HALF_UP);
+        BigDecimal avgMonthlyIncome = activeIncomeMonths == 0 ? BigDecimal.ZERO
+                : totalIncome.divide(BigDecimal.valueOf(activeIncomeMonths), 2, RoundingMode.HALF_UP);
+
+        // Ən tez-tez istifadə edilən kateqoriya
+        String mostFrequentCategory = byCategory.entrySet().stream()
+                .max(Comparator.comparingInt(e -> e.getValue().size()))
+                .map(Map.Entry::getKey).orElse("-");
+
+        String mostExpensiveCategory = topCategories.isEmpty() ? "-"
+                : topCategories.get(0).categoryName();
+
+        return new FinancialWrappedResponse(
+                year,
+                totalIncome, totalExpense, totalSaved, savingsRate,
+                topCategories,
+                biggestExpenseMonth != null ? biggestExpenseMonth.monthLabel() : "-",
+                biggestExpenseMonth != null ? biggestExpenseMonth.expense() : BigDecimal.ZERO,
+                biggestIncomeMonth  != null ? biggestIncomeMonth.monthLabel() : "-",
+                biggestIncomeMonth  != null ? biggestIncomeMonth.income()  : BigDecimal.ZERO,
+                monthlyBreakdown,
+                all.size(), expenses.size(), incomes.size(),
+                avgMonthlyExpense, avgMonthlyIncome,
+                mostExpensiveCategory, mostFrequentCategory
+        );
+    }
+
+    private BigDecimal sum(List<Transaction> list) {
+        return list.stream().map(Transaction::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
     @Override
     @Transactional(readOnly = true)
     public DashboardStatsResponse getStatsByPeriod(String period) {

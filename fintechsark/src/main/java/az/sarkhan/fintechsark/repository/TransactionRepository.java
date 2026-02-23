@@ -221,4 +221,14 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
     List<Transaction> searchTransactions(
             @Param("userId") Long userId,
             @Param("query") String query);
+
+    @Query(value = """
+    SELECT DISTINCT EXTRACT(YEAR FROM date)::int AS year
+    FROM transactions
+    WHERE user_id = :userId AND is_deleted = false
+    ORDER BY year DESC
+    """, nativeQuery = true)
+    List<Integer> findDistinctYears(@Param("userId") Long userId);
+
+
 }

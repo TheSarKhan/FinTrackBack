@@ -2,6 +2,7 @@ package az.sarkhan.fintechsark.controller;
 
 import az.sarkhan.fintechsark.dto.response.CategoryExpenseResponse;
 import az.sarkhan.fintechsark.dto.response.DashboardStatsResponse;
+import az.sarkhan.fintechsark.dto.response.FinancialWrappedResponse;
 import az.sarkhan.fintechsark.service.DashboardService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -46,5 +47,14 @@ public class DashboardController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
         return ResponseEntity.ok(dashboardService.getDrilldown(parentId, startDate, endDate));
+    }
+    @GetMapping("/wrapped")
+    public ResponseEntity<FinancialWrappedResponse> getWrapped(
+            @RequestParam(defaultValue = "2025") int year) {
+        return ResponseEntity.ok(dashboardService.getWrapped(year));
+    }
+    @GetMapping("/wrapped/years")
+    public ResponseEntity<List<Integer>> getWrappedYears() {
+        return ResponseEntity.ok(dashboardService.getAvailableYears());
     }
 }
