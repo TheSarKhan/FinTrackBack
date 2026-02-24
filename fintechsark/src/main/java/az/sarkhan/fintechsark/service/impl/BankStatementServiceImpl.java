@@ -73,17 +73,12 @@ public class BankStatementServiceImpl implements BankStatementService {
 
         if (dataStartRow == -1) return rows;
 
-        Category cat = categories.stream()
-                .filter(c -> c.getName().equalsIgnoreCase("Bank Çıxarışı"))
-                .findFirst()
-                .orElse(null);
-
         for (int i = dataStartRow; i <= sheet.getLastRowNum(); i++) {
             Row row = sheet.getRow(i);
             if (row == null) continue;
 
-            String dateStr  = stringVal(row.getCell(1));
-            String fullDesc = stringVal(row.getCell(2));
+            String dateStr   = stringVal(row.getCell(1));
+            String fullDesc  = stringVal(row.getCell(2));
             BigDecimal income  = decimalVal(row.getCell(3));
             BigDecimal expense = decimalVal(row.getCell(4));
 
@@ -92,7 +87,10 @@ public class BankStatementServiceImpl implements BankStatementService {
             LocalDate date = parseDate(row.getCell(1));
             if (date == null) continue;
 
-            String description = fullDesc.trim();
+            // Təsvirin ilk hissəsini götür (~-dən əvvəl)
+            String cleanDesc = fullDesc.contains("~")
+                    ? fullDesc.split("~")[0].trim()
+                    : fullDesc.trim();
 
             TransactionType type;
             BigDecimal amount;
@@ -105,13 +103,16 @@ public class BankStatementServiceImpl implements BankStatementService {
                 amount = income;
             }
 
+            // Kateqoriya təyin et
+            Category cat = detectAbbCategory(cleanDesc, type, categories);
             Category parent = cat != null ? cat.getParent() : null;
+
             rows.add(new BankStatementRow(
                     date,
-                    description,
+                    cleanDesc,
                     cat != null ? cat.getId() : null,
-                    "Bank Çıxarışı",
-                    parent != null ? parent.getId() : null,
+                    cat != null ? cat.getName() : "Bank Çıxarışı",
+                    parent != null ? parent.getId()   : null,
                     parent != null ? parent.getName() : null,
                     type,
                     amount
@@ -120,13 +121,117 @@ public class BankStatementServiceImpl implements BankStatementService {
 
         return rows;
     }
+
+    private Category detectAbbCategory(String desc, TransactionType type, List<Category> categories) {
+        String d = desc.toUpperCase();
+
+        String categoryName = detectAbbCategoryName(d, type);
+
+        return categories.stream()
+                .filter(c -> c.getName().equalsIgnoreCase(categoryName))
+                .findFirst()
+                .orElse(
+                        categories.stream()
+                                .filter(c -> c.getName().equalsIgnoreCase("Bank Çıxarışı"))
+                                .findFirst()
+                                .orElse(null)
+                );
+    }
+
+    private String detectAbbCategoryName(String d, TransactionType type) {
+
+        // ── Nəqliyyat ────────────────────────────────────────────────────────
+        if (d.contains("TP METRO") || d.contains("TP BUS") ||
+                d.contains("ADY RAILWAY") || d.contains("M10 TOP UP")) {
+            return "İctimai Nəqliyyat";
+        }
+
+        // ── Restoran və Kafe ─────────────────────────────────────────────────
+        if (d.contains("TURCO BURITTO") || d.contains("MA DESSERTS") ||
+                d.contains("KUDO KUDO")     || d.contains("KFC") ||
+                d.contains("BORANI")        || d.contains("KOMAGENE") ||
+                d.contains("PIDEM")         || d.contains("KAFE") ||
+                d.contains("RESTORAN")      || d.contains("MIX POINT") ||
+                d.contains("KOFE EVI")      || d.contains("9 BAR") ||
+                d.contains("OVEN 2")        || d.contains("TELMANIN KOZ") ||
+                d.contains("WOLT")          || d.contains("WINGZ")) {
+            return "Restoran və Kafe";
+        }
+
+        // ── Qida və Market ───────────────────────────────────────────────────
+        if (d.contains("ERZAQ")   || d.contains("EMINEM MARKET") ||
+                d.contains("FERMER")  || d.contains("BRAVO") ||
+                d.contains("RAHAT")   || d.contains("OBA MARKET") ||
+                d.contains("OBA NEF") || d.contains("NUR MARKET") ||
+                d.contains("NURAY")   || d.contains("SAHIL MARKET") ||
+                d.contains("BIRMARKET")|| d.contains("KOROGLU") ||
+                d.contains("BOL BLUE")|| d.contains("BOL REBUS") ||
+                d.contains("BAZARSTORE")|| d.contains("YATMARKA") ||
+                d.contains("YARMARKA") || d.contains("MAGAZASI") ||
+                d.contains("RAHАТ AILA")) {
+            return "Supermarket";
+        }
+
+        // ── Geyim və Şəxsi ───────────────────────────────────────────────────
+        if (d.contains("BERSHKA")    || d.contains("LC WAIKIKI") ||
+                d.contains("NEW YORKER") || d.contains("GLORIA JEANS") ||
+                d.contains("SKECHERS")   || d.contains("GUL MAGAZASI") ||
+                d.contains("PARFUMERIYA")|| d.contains("AYSEL PERFUMES") ||
+                d.contains("TRENDYOL")   || d.contains("TEMU") ||
+                d.contains("DUAKS")      || d.contains("MPOS VVULZ")) {
+            return "Geyim";
+        }
+
+        // ── Əyləncə ──────────────────────────────────────────────────────────
+        if (d.contains("CINEMA")     || d.contains("KINOZALI") ||
+                d.contains("ITICKET")    || d.contains("EPOINT") ||
+                d.contains("SU IDMAN")   || d.contains("SPOTIFY") ||
+                d.contains("STEAM")      || d.contains("GOOGLE") ||
+                d.contains("APPLE.COM")  || d.contains("UDEMY") ||
+                d.contains("PARKCINEMA") || d.contains("KINGSMART")) {
+            return "Kino və Teatr";
+        }
+
+        // ── Kommunal / İnternet ──────────────────────────────────────────────
+        if (d.contains("AZERCELL")  || d.contains("BAKCELL") ||
+                d.contains("AZLINK")    || d.contains("IBA MOBILE") ||
+                d.contains("HOSTINGER") || d.contains("PAYTР") ||
+                d.contains("PAYTР O*")  || d.contains("OFISAIT") ||
+                d.contains("JETSHR")) {
+            return "İnternet";
+        }
+
+        // ── Kitab və Təhsil ──────────────────────────────────────────────────
+        if (d.contains("KITAB EVI") || d.contains("ALI VE NINO") ||
+                d.contains("ALI VA NINO")) {
+            return "Kitab";
+        }
+
+        // ── Maliyyə Köçürməsi / Gəlir ────────────────────────────────────────
+        if (d.contains("BIRBANK")     || d.contains("ASB P2P") ||
+                d.contains("P2P SEND")    || d.contains("KARTA M") ||
+                d.contains("IPS ILE C2C") || d.contains("CARDTOCARD") ||
+                d.contains("C2C TO")      || d.contains("YELO BKM") ||
+                d.contains("UFX C2C")     || d.contains("PULZ") ||
+                d.contains("ANIPAY")      || d.contains("UNIBANK") ||
+                d.contains("TERMINAL PAYMENT")) {
+            return type == TransactionType.INCOME ? "Əlavə Gəlir" : "Bank Çıxarışı";
+        }
+
+        // ── Cashback / Faiz ──────────────────────────────────────────────────
+        if (d.contains("FAIZ") || d.contains("CASHBACK") || d.contains("FAYDALI")) {
+            return "Əlavə Gəlir";
+        }
+
+        // ── Default ──────────────────────────────────────────────────────────
+        return "Bank Çıxarışı";
+    }
     // ── LeoBank ───────────────────────────────────────────────────────────
 // Format: Tarix | Təyinat | Məbləğ | Komissiya | Balans
 // Tarix: dd-MM-yyyy HH:mm:ss  |  Məbləğ: mənfi → XƏRC, müsbət → GƏLİR
     private List<BankStatementRow> parseLeobank(Sheet sheet, List<Category> categories) {
         List<BankStatementRow> rows = new ArrayList<>();
 
-        // Header sətirini tap
         int dataStartRow = -1;
         for (int i = 0; i <= sheet.getLastRowNum(); i++) {
             Row row = sheet.getRow(i);
@@ -140,26 +245,19 @@ public class BankStatementServiceImpl implements BankStatementService {
 
         if (dataStartRow == -1) return rows;
 
-        Category cat = categories.stream()
-                .filter(c -> c.getName().equalsIgnoreCase("Bank Çıxarışı"))
-                .findFirst()
-                .orElse(null);
-
         for (int i = dataStartRow; i <= sheet.getLastRowNum(); i++) {
             Row row = sheet.getRow(i);
             if (row == null) continue;
 
             String dateStr    = stringVal(row.getCell(0));
-            String description = stringVal(row.getCell(1));
+            String description = stringVal(row.getCell(1)).trim();
             String amountStr  = stringVal(row.getCell(2));
 
             if (dateStr.isBlank()) continue;
 
-            // Tarix: "23-01-2026 14:33:23" → dd-MM-yyyy
             LocalDate date = parsLeobankDate(dateStr);
             if (date == null) continue;
 
-            // Məbləğ: "-0.7" → XƏRC, "17.05" → GƏLİR
             BigDecimal amount;
             try {
                 amount = new BigDecimal(amountStr.replace(",", ".").replace(" ", ""));
@@ -180,12 +278,15 @@ public class BankStatementServiceImpl implements BankStatementService {
                 absAmount = amount;
             }
 
+            // Kateqoriya təyin et
+            Category cat = detectLeobankCategory(description, type, categories);
             Category parent = cat != null ? cat.getParent() : null;
+
             rows.add(new BankStatementRow(
                     date,
-                    description.trim(),
+                    description,
                     cat != null ? cat.getId() : null,
-                    "Bank Çıxarışı",
+                    cat != null ? cat.getName() : "Bank Çıxarışı",
                     parent != null ? parent.getId()   : null,
                     parent != null ? parent.getName() : null,
                     type,
@@ -194,6 +295,59 @@ public class BankStatementServiceImpl implements BankStatementService {
         }
 
         return rows;
+    }
+
+    private Category detectLeobankCategory(String desc, TransactionType type, List<Category> categories) {
+        String categoryName = detectLeobankCategoryName(desc.toUpperCase(), type);
+        return categories.stream()
+                .filter(c -> c.getName().equalsIgnoreCase(categoryName))
+                .findFirst()
+                .orElse(
+                        categories.stream()
+                                .filter(c -> c.getName().equalsIgnoreCase("Bank Çıxarışı"))
+                                .findFirst()
+                                .orElse(null)
+                );
+    }
+
+    private String detectLeobankCategoryName(String d, TransactionType type) {
+
+        // ── Nəqliyyat ────────────────────────────────────────────────────────
+        if (d.contains("TP METRO") || d.contains("TP BUS") || d.contains("M10 TOP UP")) {
+            return "İctimai Nəqliyyat";
+        }
+
+        // ── Kommunal / Telefon ───────────────────────────────────────────────
+        if (d.contains("EMANAT")) {
+            return "Telefon";
+        }
+
+        // ── Əyləncə / Abunəlik ───────────────────────────────────────────────
+        if (d.contains("GOOGLE")) {
+            return "Abunəlik";
+        }
+
+        // ── Maliyyə Köçürməsi / Gəlir ────────────────────────────────────────
+        if (d.contains("BIRBANK")   || d.contains("DOSTBANK") ||
+                d.contains("ANIPAY")    || d.contains("416973") ||
+                d.contains("552209")) {
+            return type == TransactionType.INCOME ? "Əlavə Gəlir" : "Bank Çıxarışı";
+        }
+
+        // ── Qənaət / Faiz ────────────────────────────────────────────────────
+        if (d.contains("ARTIM") || d.contains("PROSTA") || d.contains("XƏZİNƏ")) {
+            return type == TransactionType.INCOME ? "Əlavə Gəlir" : "Bank Çıxarışı";
+        }
+
+        // ── Şəxsdən gələn köçürmə (adlar) ────────────────────────────────────
+        if (d.contains("KAMRAN")  || d.contains("FAZIL") ||
+                d.contains("TOFIQ")   || d.contains("RƏVAN") ||
+                d.contains("REVAN")) {
+            return type == TransactionType.INCOME ? "Əlavə Gəlir" : "Bank Çıxarışı";
+        }
+
+        // ── Default ──────────────────────────────────────────────────────────
+        return "Bank Çıxarışı";
     }
 
     private LocalDate parsLeobankDate(String dateStr) {
