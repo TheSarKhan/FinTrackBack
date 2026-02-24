@@ -29,4 +29,6 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
     // Check name uniqueness within parent for a user
     @Query("SELECT COUNT(c) > 0 FROM Category c WHERE c.name = :name AND c.parent.id = :parentId AND (c.user IS NULL OR c.user.id = :userId) AND c.isActive = true")
     boolean existsByNameAndParentAndUser(@Param("name") String name, @Param("parentId") Long parentId, @Param("userId") Long userId);
+
+    long countByUserIsNull();
 }
